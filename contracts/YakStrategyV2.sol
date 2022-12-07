@@ -168,7 +168,7 @@ abstract contract YakStrategyV2 is YakERC20, Ownable, Permissioned {
      * @param amount deposit tokens
      * @return receipt tokens
      */
-    function getSharesForDepositTokens(uint256 amount) public view returns (uint256) {
+    function getSharesForDepositTokens(uint256 amount) public view virtual returns (uint256) {
         if (totalSupply == 0 || totalDeposits() == 0) {
             return amount;
         }
@@ -180,8 +180,8 @@ abstract contract YakStrategyV2 is YakERC20, Ownable, Permissioned {
      * @param amount receipt tokens
      * @return deposit tokens
      */
-    function getDepositTokensForShares(uint256 amount) public view returns (uint256) {
-        if (totalSupply == 0 || totalDeposits() == 0) {
+    function getDepositTokensForShares(uint256 amount) public view virtual returns (uint256) {
+        if (totalSupply * totalDeposits() == 0) {
             return 0;
         }
         return (amount * totalDeposits()) / totalSupply;
