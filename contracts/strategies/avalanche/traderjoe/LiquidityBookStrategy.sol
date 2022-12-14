@@ -22,7 +22,9 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
     uint256 internal constant SCALE_OFFSET = 128;
     uint256 internal constant PRECISION = 1e18;
 
-    IWAVAX internal immutable WAVAX;
+    address internal immutable WAVAX;
+    uint256 internal immutable X_DECIMALS_ADJUSTMENT;
+    uint256 internal immutable Y_DECIMALS_ADJUSTMENT;
     ILBPair public immutable lbPair;
     ILBRouter public immutable lbRouter;
     address public immutable tokenX;
@@ -35,21 +37,30 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
 
     uint256[] public distributionX;
     uint256[] public distributionY;
+    uint256 public activeBinDistributionX;
+    uint256 public activeBinDistributionY;
     int256[] public deltas;
     uint256 public maxRebalancingSlippage;
+    bool public calculateActiveBinAmounts;
+    uint256 public rebalanceGasEstimate;
 
-    uint256 activeBinDistributionX;
-    uint256 activeBinDistributionY;
+    address public manager;
 
     event Deposit(address indexed account, uint256 amountX, uint256 amountY);
     event Withdraw(address indexed account, uint256 amountX, uint256 amountY);
-    event Reinvest(uint256 amountX, uint256 amountY, uint256 totalSupply);
+    event Reinvest(uint256 totalX, uint256 totalY, uint256 totalSupply);
+
+    modifier onlyManager() {
+        require(msg.sender == manager, "LiquidityBookStrategy::onlyManager");
+        _;
+    }
 
     struct LiquidityBookStrategySettings {
         string name;
         address platformToken;
         address timelock;
         address devAddr;
+        address manager;
         address lbRouter;
         address tokenX;
         address tokenY;
@@ -57,6 +68,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         uint256[] distributionX;
         uint256[] distributionY;
         int256[] deltas;
+        bool calculateActiveBinAmounts;
         uint256 maxRebalancingSlippage;
         address swapPairTokenX;
         address swapPairTokenY;
@@ -66,11 +78,18 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         YakStrategyV2(_strategySettings)
     {
         name = _settings.name;
-        WAVAX = IWAVAX(_settings.platformToken);
+        WAVAX = _settings.platformToken;
+        require(_strategySettings.rewardToken == WAVAX, "LiquidityBookStrategy::constructor - Invalid reinvest reward");
         devAddr = _settings.devAddr;
+        manager = _settings.manager;
 
         tokenX = _settings.tokenX;
         tokenY = _settings.tokenY;
+        uint256 decimalsX = IERC20(tokenX).decimals();
+        uint256 decimalsY = IERC20(tokenY).decimals();
+        X_DECIMALS_ADJUSTMENT = (decimalsY > decimalsX ? (10**(decimalsY - decimalsX)) : 1);
+        Y_DECIMALS_ADJUSTMENT = (decimalsX > decimalsY ? (10**(decimalsX - decimalsY)) : 1);
+
         binStep = _settings.binStep;
         lbRouter = ILBRouter(_settings.lbRouter);
         (, address lbPairAddress, , ) = ILBFactory(ILBRouter(_settings.lbRouter).factory()).getLBPairInformation(
@@ -82,36 +101,58 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         swapPairTokenX = _settings.swapPairTokenX;
         swapPairTokenY = _settings.swapPairTokenY;
         maxRebalancingSlippage = _settings.maxRebalancingSlippage;
-        _updateDistribution(_settings.distributionX, _settings.distributionY, _settings.deltas, false, 0);
+        _updateDistribution(
+            _settings.distributionX,
+            _settings.distributionY,
+            _settings.deltas,
+            _settings.calculateActiveBinAmounts,
+            false,
+            0
+        );
 
         updateDepositsEnabled(true);
         transferOwnership(_settings.timelock);
         emit Reinvest(0, 0);
     }
 
-    function rebalance(uint256 _maxSlippage) external onlyDev {
+    function rebalance(uint256 _maxSlippage) external onlyManager {
+        uint256 gasleftBefore = gasleft();
         _removeAllLiquidity();
-        _rebalance(_maxSlippage);
+        _rebalance(_maxSlippage, false);
+        rebalanceGasEstimate = gasleftBefore - gasleft();
     }
 
     function updateMaxRebalancingSlippage(uint256 _maxSlippage) external onlyDev {
         maxRebalancingSlippage = _maxSlippage;
     }
 
+    function updateManager(address _manager) external onlyDev {
+        manager = _manager;
+    }
+
     function updateDistribution(
         uint256[] memory _distributionX,
         uint256[] memory _distributionY,
         int256[] memory _deltas,
+        bool _calculateActiveBinAmounts,
         bool _triggerRebalance,
         uint256 _rebalanceSlippage
     ) external onlyDev {
-        _updateDistribution(_distributionX, _distributionY, _deltas, _triggerRebalance, _rebalanceSlippage);
+        _updateDistribution(
+            _distributionX,
+            _distributionY,
+            _deltas,
+            _calculateActiveBinAmounts,
+            _triggerRebalance,
+            _rebalanceSlippage
+        );
     }
 
     function _updateDistribution(
         uint256[] memory _distributionX,
         uint256[] memory _distributionY,
         int256[] memory _deltas,
+        bool _calculateActiveBinAmounts,
         bool _triggerRebalance,
         uint256 _rebalanceSlippage
     ) internal {
@@ -156,8 +197,9 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
 
         if (_triggerRebalance) {
             _removeAllLiquidity();
-            _rebalance(_rebalanceSlippage);
+            _rebalance(_rebalanceSlippage, false);
         }
+        calculateActiveBinAmounts = _calculateActiveBinAmounts;
     }
 
     /**
@@ -314,8 +356,8 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         (binIds, liquidityAdded) = lbRouter.addLiquidity(liquidityParameters);
     }
 
-    function withdraw(uint256 _amount) external override {
-        (uint256 amountX, uint256 amountY) = _removeLiquidity(_amount);
+    function withdraw(uint256 _shares) external override {
+        (uint256 amountX, uint256 amountY) = _withdraw(_shares);
         require(amountX > 0 || amountY > 0, "LiquidityBookStrategy::Withdraw amount too low");
         if (amountX > 0) {
             IERC20(tokenX).safeTransfer(msg.sender, amountX);
@@ -323,7 +365,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         if (amountY > 0) {
             IERC20(tokenY).safeTransfer(msg.sender, amountY);
         }
-        _burn(msg.sender, _amount);
+        _burn(msg.sender, _shares);
         emit Withdraw(msg.sender, amountX, amountY);
     }
 
@@ -336,7 +378,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         amountY = (_shares * amountY) / totalSupply;
     }
 
-    function _removeLiquidity(uint256 _shares) internal returns (uint256 withdrawAmountX, uint256 withdrawAmountY) {
+    function _withdraw(uint256 _shares) internal returns (uint256 withdrawAmountX, uint256 withdrawAmountY) {
         uint256 amountX;
         uint256 amountY;
         uint256[] memory lbTokenAmounts;
@@ -352,7 +394,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
                 amountX += lbTokenAmounts[i].mulDivRoundDown(binReserveX, tSupply);
                 amountY += lbTokenAmounts[i].mulDivRoundDown(binReserveY, tSupply);
             }
-            return _withdrawFromStakingContract(amountX, amountY, lbTokenAmounts, binIds);
+            return _removeLiquidity(amountX, amountY, lbTokenAmounts, binIds);
         }
     }
 
@@ -372,7 +414,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         lbPair.collectFees(address(this), currentBins);
 
         uint256 devFee = (total * DEV_FEE_BIPS) / BIPS_DIVISOR;
-        uint256 reinvestFee = (total * REINVEST_REWARD_BIPS) / BIPS_DIVISOR;
+        uint256 reinvestFee = userDeposit ? 0 : (total * REINVEST_REWARD_BIPS) / BIPS_DIVISOR;
         uint256 feeTotal = devFee + reinvestFee;
         if (rewardTokenBalance < feeTotal) {
             if (tokenXConverted > tokenYConverted) {
@@ -383,10 +425,11 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         }
         payFees(devFee, reinvestFee);
 
-        (uint256 amountX, uint256 amountY) = _removeAllLiquidity();
-        _rebalance(maxRebalancingSlippage);
+        _rebalance(maxRebalancingSlippage, true);
 
-        emit Reinvest(amountX, amountY, totalSupply);
+        (uint256 totalXBalance, uint256 totalYBalance, , ) = depositBalances();
+
+        emit Reinvest(totalXBalance, totalYBalance, totalSupply);
     }
 
     function _swapFees(
@@ -394,6 +437,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         address _swapPair,
         uint256 _feeTotal
     ) internal {
+        if (_token == WAVAX) return;
         uint256 tokenInAmount = DexLibrary.estimateConversionThroughPair(
             _feeTotal,
             address(rewardToken),
@@ -431,62 +475,127 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         (uint256 amountX, uint256 amountY) = lbPair.pendingFees(address(this), currentBins);
         rewardTokenBalance = rewardToken.balanceOf(address(this));
         if (amountX > 0) {
-            tokenXConverted = DexLibrary.estimateConversionThroughPair(
-                amountX,
-                tokenX,
-                address(rewardToken),
-                IPair(swapPairTokenX),
-                DexLibrary.DEFAULT_SWAP_FEE
-            );
+            tokenXConverted = tokenX == WAVAX
+                ? amountX
+                : DexLibrary.estimateConversionThroughPair(
+                    amountX,
+                    tokenX,
+                    address(rewardToken),
+                    IPair(swapPairTokenX),
+                    DexLibrary.DEFAULT_SWAP_FEE
+                );
         }
         if (amountY > 0) {
-            tokenYConverted = DexLibrary.estimateConversionThroughPair(
-                amountY,
-                tokenY,
-                address(rewardToken),
-                IPair(swapPairTokenY),
-                DexLibrary.DEFAULT_SWAP_FEE
-            );
+            tokenYConverted = tokenY == WAVAX
+                ? amountY
+                : DexLibrary.estimateConversionThroughPair(
+                    amountY,
+                    tokenY,
+                    address(rewardToken),
+                    IPair(swapPairTokenY),
+                    DexLibrary.DEFAULT_SWAP_FEE
+                );
         }
         total = rewardTokenBalance + tokenXConverted + tokenYConverted;
     }
 
-    function _bip() internal view virtual returns (uint256) {
-        return 10000;
-    }
+    function _rebalance(uint256 _maxSlippage, bool _reinvesting) internal {
+        (, , uint256 activeBin) = lbPair.getReservesAndId();
+        bool activeBinOnly = deltas.length == 0;
 
-    function _rebalance(uint256 _maxSlippage) internal {
+        if (_reinvesting && (!activeBinOnly || activeBin != currentBins[0])) {
+            _removeAllLiquidity();
+        } else {
+            currentBins = new uint256[](0);
+        }
+
         uint256 amountX = IERC20(tokenX).balanceOf(address(this));
         uint256 amountY = IERC20(tokenY).balanceOf(address(this));
 
-        uint256 activeBinMaxX = (amountX * activeBinDistributionX) / PRECISION;
-        uint256 activeBinMaxY = (amountX * activeBinDistributionX) / PRECISION;
-
-        (, , uint256 activeBin) = lbPair.getReservesAndId();
-
-        (uint256 depositX, uint256 depositY) = _calculateOptimalActiveBinDepositAmounts(
-            activeBin,
-            activeBinMaxX,
-            activeBinMaxY
-        );
-
         if (amountX > 0 || amountY > 0) {
+            if (!_reinvesting) {
+                (uint256 tokenXUsed, uint256 tokenYUsed) = _refundManager(amountX, amountY);
+                amountX -= tokenXUsed;
+                amountY -= tokenYUsed;
+            }
+
+            uint256 depositX = (amountX * activeBinDistributionX) / PRECISION;
+            uint256 depositY = (amountY * activeBinDistributionY) / PRECISION;
+
+            if (!activeBinOnly || calculateActiveBinAmounts) {
+                (depositX, depositY) = _calculateOptimalActiveBinDepositAmounts(activeBin, depositX, depositY);
+            }
+
             _addLiquidityToActiveBin(activeBin, depositX, depositY, _maxSlippage);
-            amountX -= depositX;
-            amountY -= depositY;
-            _maxSlippage = 10;
-            if (deltas.length > 1 && (amountX > 0 || amountY > 0)) {
-                (currentBins, ) = _addLiquidity(
-                    amountX,
-                    amountY,
-                    distributionX,
-                    distributionY,
-                    deltas,
-                    activeBin,
-                    _maxSlippage
-                );
+
+            if (!activeBinOnly) {
+                amountX -= depositX;
+                amountY -= depositY;
+                _maxSlippage = 10;
+                if (amountX > 0 || amountY > 0) {
+                    (currentBins, ) = _addLiquidity(
+                        amountX,
+                        amountY,
+                        distributionX,
+                        distributionY,
+                        deltas,
+                        activeBin,
+                        _maxSlippage
+                    );
+                }
             }
             currentBins.push(activeBin);
+        }
+    }
+
+    function _refundManager(uint256 _amountXTotal, uint256 _amountYTotal)
+        internal
+        returns (uint256 tokenXUsed, uint256 tokenYUsed)
+    {
+        uint256 rebalanceGasUsage = rebalanceGasEstimate;
+        if (rebalanceGasUsage > 0) {
+            uint256 gasCostEstimate = rebalanceGasUsage * tx.gasprice;
+            address tokenIn;
+            uint256 tokenInAmount;
+            address pair;
+            if (_amountXTotal > 0) {
+                tokenInAmount = DexLibrary.estimateConversionThroughPair(
+                    gasCostEstimate,
+                    WAVAX,
+                    tokenX,
+                    IPair(swapPairTokenX),
+                    DexLibrary.DEFAULT_SWAP_FEE
+                );
+                if (_amountXTotal > tokenInAmount) {
+                    tokenIn = tokenX;
+                    tokenXUsed = tokenInAmount;
+                    pair = swapPairTokenX;
+                }
+            }
+            if (_amountYTotal > 0 && tokenIn == address(0)) {
+                tokenInAmount = DexLibrary.estimateConversionThroughPair(
+                    gasCostEstimate,
+                    WAVAX,
+                    tokenY,
+                    IPair(swapPairTokenY),
+                    DexLibrary.DEFAULT_SWAP_FEE
+                );
+                if (_amountYTotal > tokenInAmount) {
+                    tokenIn = tokenY;
+                    tokenYUsed = tokenInAmount;
+                    pair = swapPairTokenY;
+                }
+            }
+            if (tokenIn > address(0)) {
+                uint256 refund = DexLibrary.swap(
+                    tokenInAmount,
+                    tokenIn,
+                    WAVAX,
+                    IPair(pair),
+                    DexLibrary.DEFAULT_SWAP_FEE
+                );
+                IERC20(WAVAX).safeTransfer(manager, refund);
+            }
         }
     }
 
@@ -496,17 +605,24 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         uint256 _maxAmountY
     ) internal view returns (uint256 depositX, uint256 depositY) {
         (uint256 reserveX, uint256 reserveY) = lbPair.getBin(uint24(_activeBin));
+        reserveX = reserveX * X_DECIMALS_ADJUSTMENT;
+        reserveY = reserveY * Y_DECIMALS_ADJUSTMENT;
+
         uint256 total = reserveX + reserveY;
 
         uint256 percentageX = reserveX.mulDivRoundDown(10000, total);
         uint256 percentageY = reserveY.mulDivRoundDown(10000, total);
 
         depositX = _maxAmountX;
-        depositY = _maxAmountX.mulDivRoundDown(10000, percentageX).mulDivRoundDown(percentageY, 10000);
+        depositY =
+            _maxAmountX.mulDivRoundDown(10000, percentageX).mulDivRoundDown(percentageY, 10000) /
+            Y_DECIMALS_ADJUSTMENT;
 
         if (depositY > _maxAmountY) {
             depositY = _maxAmountY;
-            depositX = _maxAmountY.mulDivRoundDown(10000, percentageY).mulDivRoundDown(percentageX, 10000);
+            depositX =
+                _maxAmountY.mulDivRoundDown(10000, percentageY).mulDivRoundDown(percentageX, 10000) /
+                X_DECIMALS_ADJUSTMENT;
         }
     }
 
@@ -517,16 +633,11 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
             uint256[] memory lbTokenAmounts,
             uint256[] memory ids
         ) = depositBalances();
-        (withdrawAmountX, withdrawAmountY) = _withdrawFromStakingContract(
-            totalXBalance,
-            totalYBalance,
-            lbTokenAmounts,
-            ids
-        );
+        (withdrawAmountX, withdrawAmountY) = _removeLiquidity(totalXBalance, totalYBalance, lbTokenAmounts, ids);
         currentBins = new uint256[](0);
     }
 
-    function _withdrawFromStakingContract(
+    function _removeLiquidity(
         uint256 totalXBalance,
         uint256 totalYBalance,
         uint256[] memory lbTokenAmounts,
