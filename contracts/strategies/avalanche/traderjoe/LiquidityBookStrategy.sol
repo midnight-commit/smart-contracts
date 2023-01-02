@@ -50,8 +50,22 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
     event Withdraw(address indexed account, uint256 amountX, uint256 amountY);
     event Reinvest(uint256 totalX, uint256 totalY, uint256 totalSupply);
 
+    error InvalidReinvestRewardToken();
+    error OnlyManager();
+    error DistributionMismatch();
+    error InvalidDistribution();
+    error InvalidTokenXDistribution();
+    error InvalidTokenYDistribution();
+    error InvalidActiveBinDistribution();
+    error DepositsDisabled();
+    error InsufficientLiquidityTooAdd();
+    error WithdrawAmountTooLow();
+    error ReinvestAmountTooLow();
+    error EmergencyWithdrawMinimumXNotReached();
+    error EmergencyWithdrawMinimumYNotReached();
+
     modifier onlyManager() {
-        require(msg.sender == manager, "LiquidityBookStrategy::onlyManager");
+        if (msg.sender != manager) revert OnlyManager();
         _;
     }
 
@@ -79,7 +93,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
     {
         name = _settings.name;
         WAVAX = _settings.platformToken;
-        require(_strategySettings.rewardToken == WAVAX, "LiquidityBookStrategy::constructor - Invalid reinvest reward");
+        if (_strategySettings.rewardToken != WAVAX) revert InvalidReinvestRewardToken();
         devAddr = _settings.devAddr;
         manager = _settings.manager;
 
@@ -156,11 +170,9 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         bool _triggerRebalance,
         uint256 _rebalanceSlippage
     ) internal {
-        require(
-            _distributionX.length == _distributionY.length && _distributionX.length == _deltas.length,
-            "LiquidityBookStrategy::updateDistribution length mismatch"
-        );
-        require(_distributionX.length > 0, "LiquidityBookStrategy::updateDistribution length 0");
+        if (_distributionX.length != _distributionY.length && _distributionX.length != _deltas.length)
+            revert DistributionMismatch();
+        if (_distributionX.length == 0) revert InvalidDistribution();
 
         uint256 activeBinIndex;
         while (_deltas[activeBinIndex] != 0) {
@@ -168,10 +180,8 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         }
         activeBinDistributionX = _distributionX[activeBinIndex];
         activeBinDistributionY = _distributionY[activeBinIndex];
-        require(
-            activeBinDistributionX > 0 && activeBinDistributionY > 0,
-            "LiquidityBookStrategy::updateDistribution Active bin distribution off"
-        );
+        if (activeBinDistributionX == 0 && activeBinDistributionY == 0) revert InvalidActiveBinDistribution();
+
         _distributionX[activeBinIndex] = 0;
         _distributionY[activeBinIndex] = 0;
 
@@ -184,7 +194,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
                     deltas.push(_deltas[i]);
                 }
             }
-            require(sum == 1e18, "LiquidityBookStrategy::updateDistribution DistributionX off");
+            if (sum != 1e18) revert InvalidTokenXDistribution();
             sum = 0;
             for (uint256 i; i < _distributionY.length; i++) {
                 sum += _distributionY[i];
@@ -192,7 +202,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
                     distributionY.push(_distributionY[i]);
                 }
             }
-            require(sum == 1e18, "LiquidityBookStrategy::updateDistribution DistributionY off");
+            if (sum != 1e18) revert InvalidTokenYDistribution();
         }
 
         if (_triggerRebalance) {
@@ -253,7 +263,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         uint256 _amountY,
         uint256 _slippageBips
     ) internal {
-        require(DEPOSITS_ENABLED == true, "LiquidityBookStrategy::Deposits disabled");
+        if (!DEPOSITS_ENABLED) revert DepositsDisabled();
         uint256 maxPendingRewards = MAX_TOKENS_TO_DEPOSIT_WITHOUT_REINVEST;
         if (maxPendingRewards > 0) {
             uint256 estimatedTotalReward = checkReward();
@@ -329,7 +339,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         uint256 _activeBin,
         uint256 _slippageBips
     ) internal virtual returns (uint256[] memory binIds, uint256[] memory liquidityAdded) {
-        require(_amountX > 0 || _amountY > 0, "LiquidityBookStrategy::Stake amount too low");
+        if (_amountX == 0 && _amountY == 0) revert InsufficientLiquidityTooAdd();
         uint256 amountXmin = _amountX - (_amountX * _slippageBips) / BIPS_DIVISOR;
         uint256 amountYmin = _amountY - (_amountY * _slippageBips) / BIPS_DIVISOR;
 
@@ -358,7 +368,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
 
     function withdraw(uint256 _shares) external override {
         (uint256 amountX, uint256 amountY) = _withdraw(_shares);
-        require(amountX > 0 || amountY > 0, "LiquidityBookStrategy::Withdraw amount too low");
+        if (amountX == 0 && amountY == 0) revert WithdrawAmountTooLow();
         if (amountX > 0) {
             IERC20(tokenX).safeTransfer(msg.sender, amountX);
         }
@@ -409,7 +419,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
     function _reinvest(bool userDeposit) private {
         (uint256 rewardTokenBalance, uint256 tokenXConverted, uint256 tokenYConverted, uint256 total) = _checkReward();
         if (!userDeposit) {
-            require(total >= MIN_TOKENS_TO_REINVEST, "LiquidityBookStrategy::Reinvest amount too low");
+            if (total < MIN_TOKENS_TO_REINVEST) revert ReinvestAmountTooLow();
         }
         lbPair.collectFees(address(this), currentBins);
 
@@ -711,14 +721,11 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
 
         uint256 xBalanceAfter = IERC20(tokenX).balanceOf(address(this));
         uint256 yBalanceAfter = IERC20(tokenY).balanceOf(address(this));
-        require(
-            xBalanceBefore - xBalanceAfter >= _minReturnAmountAcceptedTokenX,
-            "LiquidityBookStrategy::Emergency withdraw minimum X return amount not reached"
-        );
-        require(
-            yBalanceBefore - yBalanceAfter >= _minReturnAmountAcceptedTokenY,
-            "LiquidityBookStrategy::Emergency withdraw minimum Y return amount not reached"
-        );
+        if (xBalanceBefore - xBalanceAfter < _minReturnAmountAcceptedTokenX)
+            revert EmergencyWithdrawMinimumXNotReached();
+
+        if (yBalanceBefore - yBalanceAfter < _minReturnAmountAcceptedTokenY)
+            revert EmergencyWithdrawMinimumYNotReached();
 
         (uint256 totalXBalance, uint256 totalYBalance, , ) = depositBalances();
         if (totalXBalance == 0 && totalYBalance == 0) {
