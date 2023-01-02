@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.13;
 
-import "./SafeERC20.sol";
+import "./SafeTransferLib.sol";
 import "../interfaces/IPair.sol";
 
 library DexLibrary {
-    using SafeERC20 for IERC20;
+    using SafeTransferLib for IERC20;
+
+    error AmountInTooLow();
 
     bytes private constant zeroBytes = new bytes(0);
     uint256 public constant DEFAULT_SWAP_FEE = 30;
@@ -128,7 +130,7 @@ library DexLibrary {
         uint256 swapFeeToken1
     ) internal returns (uint256) {
         uint256 amountIn = amount / 2;
-        require(amountIn > 0, "DexLibrary::_convertRewardTokensToDepositTokens");
+        if (amountIn == 0) revert AmountInTooLow();
 
         address token0 = IPair(depositToken).token0();
         uint256 amountOutToken0 = amountIn;

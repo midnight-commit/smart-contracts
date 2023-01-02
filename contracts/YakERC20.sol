@@ -26,6 +26,13 @@ abstract contract YakERC20 {
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
 
+    error OwnerZeroAddress();
+    error SpenderZeroAddress();
+    error TransferToZeroAddress();
+    error MintZeroShares();
+    error PermitExpired();
+    error InvalidSignature();
+
     constructor() {}
 
     /**
@@ -109,8 +116,8 @@ abstract contract YakERC20 {
         address spender,
         uint256 amount
     ) internal {
-        require(owner != address(0), "_approve::owner zero address");
-        require(spender != address(0), "_approve::spender zero address");
+        if (owner == address(0)) revert OwnerZeroAddress();
+        if (spender == address(0)) revert SpenderZeroAddress();
         allowances[owner][spender] = amount;
         emit Approval(owner, spender, amount);
     }
@@ -126,7 +133,7 @@ abstract contract YakERC20 {
         address to,
         uint256 value
     ) internal {
-        require(to != address(0), "_transferTokens: cannot transfer to the zero address");
+        if (to == address(0)) revert TransferToZeroAddress();
 
         balances[from] = balances[from] - value;
         balances[to] = balances[to] + value;
@@ -134,7 +141,7 @@ abstract contract YakERC20 {
     }
 
     function _mint(address to, uint256 value) internal {
-        require(value > 0, "_mint::zero shares");
+        if (value == 0) revert MintZeroShares();
         totalSupply = totalSupply + value;
         balances[to] = balances[to] + value;
         emit Transfer(address(0), to, value);
@@ -165,7 +172,7 @@ abstract contract YakERC20 {
         bytes32 r,
         bytes32 s
     ) external {
-        require(deadline >= block.timestamp, "permit::expired");
+        if (block.timestamp > deadline) revert PermitExpired();
 
         bytes32 encodeData = keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, value, nonces[owner]++, deadline));
         _validateSignedData(owner, encodeData, v, r, s);
@@ -191,7 +198,7 @@ abstract contract YakERC20 {
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", getDomainSeparator(), encodeData));
         address recoveredAddress = ecrecover(digest, v, r, s);
         // Explicitly disallow authorizations for address(0) as ecrecover returns address(0) on malformed messages
-        require(recoveredAddress != address(0) && recoveredAddress == signer, "Arch::validateSig: invalid signature");
+        if (recoveredAddress == address(0) || recoveredAddress != signer) revert InvalidSignature();
     }
 
     /**

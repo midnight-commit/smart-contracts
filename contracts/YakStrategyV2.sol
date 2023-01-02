@@ -48,11 +48,14 @@ abstract contract YakStrategyV2 is YakERC20, Ownable, Permissioned {
     event UpdateDevAddr(address oldValue, address newValue);
     event DepositsEnabled(bool newValue);
 
+    error OnlyEOA();
+    error OnlyDev();
+
     /**
      * @notice Throws if called by smart contract
      */
     modifier onlyEOA() {
-        require(tx.origin == msg.sender, "YakStrategy::onlyEOA");
+        if (tx.origin != msg.sender) revert OnlyEOA();
         _;
     }
 
@@ -60,7 +63,7 @@ abstract contract YakStrategyV2 is YakERC20, Ownable, Permissioned {
      * @notice Only called by dev
      */
     modifier onlyDev() {
-        require(msg.sender == devAddr, "YakStrategy::onlyDev");
+        if (msg.sender != devAddr) revert OnlyDev();
         _;
     }
 
@@ -71,6 +74,8 @@ abstract contract YakStrategyV2 is YakERC20, Ownable, Permissioned {
         updateDevFee(_strategySettings.devFeeBips);
         updateReinvestReward(_strategySettings.reinvestRewardBips);
     }
+
+    error RevokeAllowance();
 
     /**
      * @notice Revoke token allowance

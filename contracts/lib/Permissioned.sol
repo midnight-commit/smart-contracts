@@ -10,9 +10,14 @@ abstract contract Permissioned is Ownable {
     event AllowDepositor(address indexed account);
     event RemoveDepositor(address indexed account);
 
+    error OnlyAllowedDepositors();
+    error DepositorAlreadyAllowed();
+    error NoAllowedDepositors();
+    error DepositorNotAllowed();
+
     modifier onlyAllowedDeposits() {
         if (numberOfAllowedDepositors > 0) {
-            require(allowedDepositors[msg.sender] == true, "Permissioned::onlyAllowedDeposits, not allowed");
+            if (!allowedDepositors[msg.sender]) revert OnlyAllowedDepositors();
         }
         _;
     }
@@ -22,7 +27,7 @@ abstract contract Permissioned is Ownable {
      * @param depositor address
      */
     function allowDepositor(address depositor) external onlyOwner {
-        require(allowedDepositors[depositor] == false, "Permissioned::allowDepositor");
+        if (allowedDepositors[depositor]) revert DepositorAlreadyAllowed();
         allowedDepositors[depositor] = true;
         numberOfAllowedDepositors = numberOfAllowedDepositors + 1;
         emit AllowDepositor(depositor);
@@ -33,8 +38,8 @@ abstract contract Permissioned is Ownable {
      * @param depositor address
      */
     function removeDepositor(address depositor) external onlyOwner {
-        require(numberOfAllowedDepositors > 0, "Permissioned::removeDepositor, no allowed depositors");
-        require(allowedDepositors[depositor] == true, "Permissioned::removeDepositor, not allowed");
+        if (numberOfAllowedDepositors == 0) revert NoAllowedDepositors();
+        if (!allowedDepositors[depositor]) revert DepositorNotAllowed();
         allowedDepositors[depositor] = false;
         numberOfAllowedDepositors = numberOfAllowedDepositors - 1;
         emit RemoveDepositor(depositor);
