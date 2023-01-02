@@ -541,7 +541,6 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
             if (!activeBinOnly) {
                 amountX -= depositX;
                 amountY -= depositY;
-                _maxSlippage = 10;
                 if (amountX > 0 || amountY > 0) {
                     (currentBins, ) = _addLiquidity(
                         amountX,
