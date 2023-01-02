@@ -4,7 +4,7 @@ pragma solidity 0.8.13;
 import "../../../interfaces/IPair.sol";
 import "../../../interfaces/IWAVAX.sol";
 import "../../../lib/DexLibrary.sol";
-import "../../../lib/SafeERC20.sol";
+import "../../../lib/SafeTransferLib.sol";
 
 import "./LiquidityBookStrategyBase.sol";
 import "./interfaces/ILBPair.sol";
@@ -16,7 +16,7 @@ import "./lib/Math512Bits.sol";
  * @notice LiquidityBookStrategy
  */
 contract LiquidityBookStrategy is LiquidityBookStrategyBase {
-    using SafeERC20 for IERC20;
+    using SafeTransferLib for IERC20;
     using Math512Bits for uint256;
 
     uint256 internal constant SCALE_OFFSET = 128;
