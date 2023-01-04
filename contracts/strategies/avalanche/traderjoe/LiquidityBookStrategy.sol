@@ -428,12 +428,12 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         uint256 feeTotal = devFee + reinvestFee;
         if (rewardTokenBalance < feeTotal) {
             if (tokenXConverted > tokenYConverted) {
-                _swapFees(tokenX, swapPairTokenX, feeTotal);
+                feeTotal = _swapFees(tokenX, swapPairTokenX, feeTotal);
             } else {
-                _swapFees(tokenY, swapPairTokenY, feeTotal);
+                feeTotal = _swapFees(tokenY, swapPairTokenY, feeTotal);
             }
         }
-        payFees(devFee, reinvestFee);
+        payFees(devFee, reinvestFee, feeTotal);
 
         _rebalance(maxRebalancingSlippage, true);
 
@@ -446,8 +446,8 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         address _token,
         address _swapPair,
         uint256 _feeTotal
-    ) internal {
-        if (_token == WAVAX) return;
+    ) internal returns (uint256) {
+        if (_token == WAVAX) return _feeTotal;
         uint256 tokenInAmount = DexLibrary.estimateConversionThroughPair(
             _feeTotal,
             address(rewardToken),
@@ -455,15 +455,20 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
             IPair(_swapPair),
             DexLibrary.DEFAULT_SWAP_FEE
         );
-        DexLibrary.swap(tokenInAmount, _token, address(rewardToken), IPair(_swapPair), DexLibrary.DEFAULT_SWAP_FEE);
+        return
+            DexLibrary.swap(tokenInAmount, _token, address(rewardToken), IPair(_swapPair), DexLibrary.DEFAULT_SWAP_FEE);
     }
 
-    function payFees(uint256 _devFee, uint256 _reinvestFee) internal {
-        if (_devFee > 0) {
-            rewardToken.safeTransfer(devAddr, _devFee);
-        }
+    function payFees(
+        uint256 _devFee,
+        uint256 _reinvestFee,
+        uint256 _feeTotal
+    ) internal {
         if (_reinvestFee > 0) {
-            rewardToken.safeTransfer(msg.sender, _reinvestFee);
+            rewardToken.safeTransfer(msg.sender, _feeTotal < _reinvestFee ? _feeTotal : _reinvestFee);
+        }
+        if (_devFee > 0) {
+            rewardToken.safeTransfer(devAddr, _feeTotal - _reinvestFee);
         }
     }
 
