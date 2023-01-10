@@ -23,8 +23,6 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
     uint256 internal constant PRECISION = 1e18;
 
     address internal immutable WAVAX;
-    uint256 internal immutable X_DECIMALS_ADJUSTMENT;
-    uint256 internal immutable Y_DECIMALS_ADJUSTMENT;
     ILBPair public immutable lbPair;
     ILBRouter public immutable lbRouter;
     address public immutable tokenX;
@@ -35,16 +33,11 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
 
     uint256[] public currentBins;
 
-    uint256[] public distributionX;
-    uint256[] public distributionY;
-    uint256 public activeBinDistributionX;
-    uint256 public activeBinDistributionY;
     int256[] public deltas;
-    uint256 public maxRebalancingSlippage;
-    bool public calculateActiveBinAmounts;
-    uint256 public rebalanceGasEstimate;
+    uint256 public maxReinvestSlippage;
 
     address public manager;
+    uint256 public rebalanceGasEstimate;
 
     event Deposit(address indexed account, uint256 amountX, uint256 amountY);
     event Withdraw(address indexed account, uint256 amountX, uint256 amountY);
@@ -52,11 +45,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
 
     error InvalidReinvestRewardToken();
     error OnlyManager();
-    error DistributionMismatch();
-    error InvalidDistribution();
-    error InvalidTokenXDistribution();
-    error InvalidTokenYDistribution();
-    error InvalidActiveBinDistribution();
+    error InvalidManager();
     error DepositsDisabled();
     error InsufficientLiquidityTooAdd();
     error WithdrawAmountTooLow();
@@ -79,13 +68,9 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         address tokenX;
         address tokenY;
         uint24 binStep;
-        uint256[] distributionX;
-        uint256[] distributionY;
-        int256[] deltas;
-        bool calculateActiveBinAmounts;
-        uint256 maxRebalancingSlippage;
         address swapPairTokenX;
         address swapPairTokenY;
+        uint256 maxReinvestSlippage;
     }
 
     constructor(LiquidityBookStrategySettings memory _settings, StrategySettings memory _strategySettings)
@@ -95,14 +80,11 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         WAVAX = _settings.platformToken;
         if (_strategySettings.rewardToken != WAVAX) revert InvalidReinvestRewardToken();
         devAddr = _settings.devAddr;
+        if (_settings.manager == address(0)) revert InvalidManager();
         manager = _settings.manager;
 
         tokenX = _settings.tokenX;
         tokenY = _settings.tokenY;
-        uint256 decimalsX = IERC20(tokenX).decimals();
-        uint256 decimalsY = IERC20(tokenY).decimals();
-        X_DECIMALS_ADJUSTMENT = (decimalsY > decimalsX ? (10**(decimalsY - decimalsX)) : 1);
-        Y_DECIMALS_ADJUSTMENT = (decimalsX > decimalsY ? (10**(decimalsX - decimalsY)) : 1);
 
         binStep = _settings.binStep;
         lbRouter = ILBRouter(_settings.lbRouter);
@@ -114,102 +96,20 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         lbPair = ILBPair(lbPairAddress);
         swapPairTokenX = _settings.swapPairTokenX;
         swapPairTokenY = _settings.swapPairTokenY;
-        maxRebalancingSlippage = _settings.maxRebalancingSlippage;
-        _updateDistribution(
-            _settings.distributionX,
-            _settings.distributionY,
-            _settings.deltas,
-            _settings.calculateActiveBinAmounts,
-            false,
-            0
-        );
+        maxReinvestSlippage = _settings.maxReinvestSlippage;
 
         updateDepositsEnabled(true);
         transferOwnership(_settings.timelock);
         emit Reinvest(0, 0);
     }
 
-    function rebalance(uint256 _maxSlippage) external onlyManager {
-        uint256 gasleftBefore = gasleft();
-        _removeAllLiquidity();
-        _rebalance(_maxSlippage, false);
-        rebalanceGasEstimate = gasleftBefore - gasleft();
-    }
-
-    function updateMaxRebalancingSlippage(uint256 _maxSlippage) external onlyDev {
-        maxRebalancingSlippage = _maxSlippage;
-    }
-
     function updateManager(address _manager) external onlyDev {
+        if (_manager == address(0)) revert InvalidManager();
         manager = _manager;
     }
 
-    function updateDistribution(
-        uint256[] memory _distributionX,
-        uint256[] memory _distributionY,
-        int256[] memory _deltas,
-        bool _calculateActiveBinAmounts,
-        bool _triggerRebalance,
-        uint256 _rebalanceSlippage
-    ) external onlyDev {
-        _updateDistribution(
-            _distributionX,
-            _distributionY,
-            _deltas,
-            _calculateActiveBinAmounts,
-            _triggerRebalance,
-            _rebalanceSlippage
-        );
-    }
-
-    function _updateDistribution(
-        uint256[] memory _distributionX,
-        uint256[] memory _distributionY,
-        int256[] memory _deltas,
-        bool _calculateActiveBinAmounts,
-        bool _triggerRebalance,
-        uint256 _rebalanceSlippage
-    ) internal {
-        if (_distributionX.length != _distributionY.length && _distributionX.length != _deltas.length)
-            revert DistributionMismatch();
-        if (_distributionX.length == 0) revert InvalidDistribution();
-
-        uint256 activeBinIndex;
-        while (_deltas[activeBinIndex] != 0) {
-            activeBinIndex++;
-        }
-        activeBinDistributionX = _distributionX[activeBinIndex];
-        activeBinDistributionY = _distributionY[activeBinIndex];
-        if (activeBinDistributionX == 0 && activeBinDistributionY == 0) revert InvalidActiveBinDistribution();
-
-        _distributionX[activeBinIndex] = 0;
-        _distributionY[activeBinIndex] = 0;
-
-        if (_deltas.length > 1) {
-            uint256 sum;
-            for (uint256 i; i < _distributionX.length; i++) {
-                sum += _distributionX[i];
-                if (i != activeBinIndex) {
-                    distributionX.push(_distributionX[i]);
-                    deltas.push(_deltas[i]);
-                }
-            }
-            if (sum != 1e18) revert InvalidTokenXDistribution();
-            sum = 0;
-            for (uint256 i; i < _distributionY.length; i++) {
-                sum += _distributionY[i];
-                if (i != activeBinIndex) {
-                    distributionY.push(_distributionY[i]);
-                }
-            }
-            if (sum != 1e18) revert InvalidTokenYDistribution();
-        }
-
-        if (_triggerRebalance) {
-            _removeAllLiquidity();
-            _rebalance(_rebalanceSlippage, false);
-        }
-        calculateActiveBinAmounts = _calculateActiveBinAmounts;
+    function updateMaxReinvestSlippage(uint256 _maxReinvestSlippage) external onlyDev {
+        maxReinvestSlippage = _maxReinvestSlippage;
     }
 
     /**
@@ -300,26 +200,11 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         uint256 _amountX,
         uint256 _amountY,
         uint256 _slippageBips
-    ) internal returns (uint256) {
-        (, , uint256 activeBin) = lbPair.getReservesAndId();
-        (uint256[] memory binIds, uint256[] memory liquidityAdded) = _addLiquidityToActiveBin(
-            activeBin,
-            _amountX,
-            _amountY,
-            _slippageBips
-        );
-        uint256 currentBinsLength = currentBins.length;
-        for (uint256 i; i < currentBinsLength; i++) {
-            if (currentBins[i] == binIds[0]) {
-                return liquidityAdded[0];
-            }
-        }
-        currentBins.push(binIds[0]);
-        return liquidityAdded[0];
+    ) internal {
+        _addLiquidityToActiveBin(_amountX, _amountY, _slippageBips);
     }
 
     function _addLiquidityToActiveBin(
-        uint256 _activeBin,
         uint256 _amountX,
         uint256 _amountY,
         uint256 _slippageBips
@@ -327,7 +212,21 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         uint256[] memory distribution = new uint256[](1);
         distribution[0] = 1e18;
         int256[] memory idDeltas = new int256[](1);
-        return _addLiquidity(_amountX, _amountY, distribution, distribution, idDeltas, _activeBin, _slippageBips);
+        (binIds, liquidityAdded) = _addLiquidity(
+            _amountX,
+            _amountY,
+            distribution,
+            distribution,
+            idDeltas,
+            _slippageBips
+        );
+        uint256 currentBinsLength = currentBins.length;
+        for (uint256 i; i < currentBinsLength; i++) {
+            if (currentBins[i] == binIds[0]) {
+                return (binIds, liquidityAdded);
+            }
+        }
+        currentBins.push(binIds[0]);
     }
 
     function _addLiquidity(
@@ -336,12 +235,12 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         uint256[] memory _distributionX,
         uint256[] memory _distributionY,
         int256[] memory _deltas,
-        uint256 _activeBin,
         uint256 _slippageBips
     ) internal virtual returns (uint256[] memory binIds, uint256[] memory liquidityAdded) {
         if (_amountX == 0 && _amountY == 0) revert InsufficientLiquidityTooAdd();
         uint256 amountXmin = _amountX - (_amountX * _slippageBips) / BIPS_DIVISOR;
         uint256 amountYmin = _amountY - (_amountY * _slippageBips) / BIPS_DIVISOR;
+        (, , uint256 activeBin) = lbPair.getReservesAndId();
 
         ILBRouter.LiquidityParameters memory liquidityParameters = ILBRouter.LiquidityParameters(
             tokenX,
@@ -351,7 +250,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
             _amountY,
             amountXmin,
             amountYmin,
-            _activeBin,
+            activeBin,
             0,
             _deltas,
             _distributionX,
@@ -408,7 +307,28 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         }
     }
 
-    function reinvest() external override {
+    function _removeLiquidity(
+        uint256 totalXBalance,
+        uint256 totalYBalance,
+        uint256[] memory lbTokenAmounts,
+        uint256[] memory ids
+    ) internal returns (uint256 withdrawAmountX, uint256 withdrawAmountY) {
+        lbPair.setApprovalForAll(address(lbRouter), true);
+        (withdrawAmountX, withdrawAmountY) = lbRouter.removeLiquidity(
+            tokenX,
+            tokenY,
+            uint16(binStep),
+            totalXBalance,
+            totalYBalance,
+            ids,
+            lbTokenAmounts,
+            address(this),
+            block.timestamp
+        );
+        lbPair.setApprovalForAll(address(lbRouter), false);
+    }
+
+    function reinvest() external override onlyEOA {
         _reinvest(false);
     }
 
@@ -421,6 +341,7 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         if (!userDeposit) {
             if (total < MIN_TOKENS_TO_REINVEST) revert ReinvestAmountTooLow();
         }
+
         lbPair.collectFees(address(this), currentBins);
 
         uint256 devFee = (total * DEV_FEE_BIPS) / BIPS_DIVISOR;
@@ -434,8 +355,11 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
             }
         }
         payFees(devFee, reinvestFee, feeTotal);
-
-        _rebalance(maxRebalancingSlippage, true);
+        _addLiquidityToActiveBin(
+            IERC20(tokenX).balanceOf(address(this)),
+            IERC20(tokenY).balanceOf(address(this)),
+            maxReinvestSlippage
+        );
 
         (uint256 totalXBalance, uint256 totalYBalance, , ) = depositBalances();
 
@@ -514,58 +438,46 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
         total = rewardTokenBalance + tokenXConverted + tokenYConverted;
     }
 
-    function _rebalance(uint256 _maxSlippage, bool _reinvesting) internal {
-        (, , uint256 activeBin) = lbPair.getReservesAndId();
-        bool activeBinOnly = deltas.length == 0;
-
-        if (_reinvesting && (!activeBinOnly || activeBin != currentBins[0])) {
-            _removeAllLiquidity();
-        } else {
-            currentBins = new uint256[](0);
-        }
-
-        uint256 amountX = IERC20(tokenX).balanceOf(address(this));
-        uint256 amountY = IERC20(tokenY).balanceOf(address(this));
-
-        if (amountX > 0 || amountY > 0) {
-            if (!_reinvesting) {
-                (uint256 tokenXUsed, uint256 tokenYUsed) = _refundManager(amountX, amountY);
-                amountX -= tokenXUsed;
-                amountY -= tokenYUsed;
-            }
-
-            uint256 depositX = (amountX * activeBinDistributionX) / PRECISION;
-            uint256 depositY = (amountY * activeBinDistributionY) / PRECISION;
-
-            if (!activeBinOnly || calculateActiveBinAmounts) {
-                (depositX, depositY) = _calculateOptimalActiveBinDepositAmounts(activeBin, depositX, depositY);
-            }
-
-            _addLiquidityToActiveBin(activeBin, depositX, depositY, _maxSlippage);
-
-            if (!activeBinOnly) {
-                amountX -= depositX;
-                amountY -= depositY;
-                if (amountX > 0 || amountY > 0) {
-                    (currentBins, ) = _addLiquidity(
-                        amountX,
-                        amountY,
-                        distributionX,
-                        distributionY,
-                        deltas,
-                        activeBin,
-                        _maxSlippage
-                    );
-                }
-            }
-            currentBins.push(activeBin);
-        }
+    function rebalance(
+        uint256[] memory _distributionX,
+        uint256[] memory _distributionY,
+        int256[] memory _deltas,
+        uint256 _slippageBips,
+        address _gasRefundReceiver
+    ) external onlyManager {
+        uint256 gasleftBefore = gasleft();
+        (uint256 withdrawAmountX, uint256 withdrawAmountY) = _removeAllLiquidity();
+        (uint256 refundX, uint256 refundY) = _refundManager(withdrawAmountX, withdrawAmountY, _gasRefundReceiver);
+        (currentBins, ) = _addLiquidity(
+            withdrawAmountX - refundX,
+            withdrawAmountY - refundY,
+            _distributionX,
+            _distributionY,
+            _deltas,
+            _slippageBips
+        );
+        rebalanceGasEstimate = gasleftBefore - gasleft();
     }
 
-    function _refundManager(uint256 _amountXTotal, uint256 _amountYTotal)
-        internal
-        returns (uint256 tokenXUsed, uint256 tokenYUsed)
-    {
+    function _removeAllLiquidity() internal returns (uint256 withdrawAmountX, uint256 withdrawAmountY) {
+        (uint256 feeX, uint256 feeY) = lbPair.collectFees(address(this), currentBins);
+        (
+            uint256 totalXBalance,
+            uint256 totalYBalance,
+            uint256[] memory lbTokenAmounts,
+            uint256[] memory ids
+        ) = depositBalances();
+        (withdrawAmountX, withdrawAmountY) = _removeLiquidity(totalXBalance, totalYBalance, lbTokenAmounts, ids);
+        withdrawAmountX += feeX;
+        withdrawAmountY += feeY;
+        currentBins = new uint256[](0);
+    }
+
+    function _refundManager(
+        uint256 _amountXTotal,
+        uint256 _amountYTotal,
+        address _gasRefundReceiver
+    ) internal returns (uint256 tokenXUsed, uint256 tokenYUsed) {
         uint256 rebalanceGasUsage = rebalanceGasEstimate;
         if (rebalanceGasUsage > 0) {
             uint256 gasCostEstimate = rebalanceGasUsage * tx.gasprice;
@@ -608,68 +520,9 @@ contract LiquidityBookStrategy is LiquidityBookStrategyBase {
                     IPair(pair),
                     DexLibrary.DEFAULT_SWAP_FEE
                 );
-                IERC20(WAVAX).safeTransfer(manager, refund);
+                IERC20(WAVAX).safeTransfer(_gasRefundReceiver > address(0) ? _gasRefundReceiver : manager, refund);
             }
         }
-    }
-
-    function _calculateOptimalActiveBinDepositAmounts(
-        uint256 _activeBin,
-        uint256 _maxAmountX,
-        uint256 _maxAmountY
-    ) internal view returns (uint256 depositX, uint256 depositY) {
-        (uint256 reserveX, uint256 reserveY) = lbPair.getBin(uint24(_activeBin));
-        reserveX = reserveX * X_DECIMALS_ADJUSTMENT;
-        reserveY = reserveY * Y_DECIMALS_ADJUSTMENT;
-
-        uint256 total = reserveX + reserveY;
-
-        uint256 percentageX = reserveX.mulDivRoundDown(10000, total);
-        uint256 percentageY = reserveY.mulDivRoundDown(10000, total);
-
-        depositX = _maxAmountX;
-        depositY =
-            _maxAmountX.mulDivRoundDown(10000, percentageX).mulDivRoundDown(percentageY, 10000) /
-            Y_DECIMALS_ADJUSTMENT;
-
-        if (depositY > _maxAmountY) {
-            depositY = _maxAmountY;
-            depositX =
-                _maxAmountY.mulDivRoundDown(10000, percentageY).mulDivRoundDown(percentageX, 10000) /
-                X_DECIMALS_ADJUSTMENT;
-        }
-    }
-
-    function _removeAllLiquidity() internal returns (uint256 withdrawAmountX, uint256 withdrawAmountY) {
-        (
-            uint256 totalXBalance,
-            uint256 totalYBalance,
-            uint256[] memory lbTokenAmounts,
-            uint256[] memory ids
-        ) = depositBalances();
-        (withdrawAmountX, withdrawAmountY) = _removeLiquidity(totalXBalance, totalYBalance, lbTokenAmounts, ids);
-        currentBins = new uint256[](0);
-    }
-
-    function _removeLiquidity(
-        uint256 totalXBalance,
-        uint256 totalYBalance,
-        uint256[] memory lbTokenAmounts,
-        uint256[] memory ids
-    ) internal returns (uint256 withdrawAmountX, uint256 withdrawAmountY) {
-        lbPair.setApprovalForAll(address(lbRouter), true);
-        (withdrawAmountX, withdrawAmountY) = lbRouter.removeLiquidity(
-            tokenX,
-            tokenY,
-            uint16(binStep),
-            totalXBalance,
-            totalYBalance,
-            ids,
-            lbTokenAmounts,
-            address(this),
-            block.timestamp
-        );
-        lbPair.setApprovalForAll(address(lbRouter), false);
     }
 
     function depositBalances()
