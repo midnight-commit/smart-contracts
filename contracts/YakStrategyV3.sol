@@ -4,12 +4,13 @@ pragma solidity 0.8.13;
 import "./YakERC20.sol";
 import "./lib/Ownable.sol";
 import "./lib/SafeERC20.sol";
+import "./lib/ReentrancyGuard.sol";
 import "./interfaces/IERC20.sol";
 
 /**
  * @notice YakStrategy should be inherited by new strategies
  */
-abstract contract YakStrategyV3 is YakERC20, Ownable {
+abstract contract YakStrategyV3 is YakERC20, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     struct StrategySettings {

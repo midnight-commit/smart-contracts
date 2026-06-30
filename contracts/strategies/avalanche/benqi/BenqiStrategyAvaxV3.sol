@@ -3,7 +3,6 @@ pragma solidity 0.8.13;
 
 import "../../../YakStrategyV2Payable.sol";
 import "../../../lib/DexLibrary.sol";
-import "../../../lib/ReentrancyGuard.sol";
 import "../../../interfaces/IWAVAX.sol";
 import "../../../interfaces/IERC20.sol";
 import "./interfaces/IBenqiUnitroller.sol";
@@ -11,7 +10,7 @@ import "./interfaces/IBenqiAVAXDelegator.sol";
 import "./interfaces/IBenqiERC20Delegator.sol";
 import "./lib/BenqiLibrary.sol";
 
-contract BenqiStrategyAvaxV3 is YakStrategyV2Payable, ReentrancyGuard {
+contract BenqiStrategyAvaxV3 is YakStrategyV2Payable {
     using SafeMath for uint256;
 
     struct LeverageSettings {

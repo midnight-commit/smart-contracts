@@ -6,7 +6,6 @@ import "../../../interfaces/IWAVAX.sol";
 import "../../../interfaces/IERC20.sol";
 import "../../../lib/SafeMath.sol";
 import "../../../lib/DexLibrary.sol";
-import "../../../lib/ReentrancyGuard.sol";
 import "./interfaces/IAaveV3IncentivesController.sol";
 import "./interfaces/ILendingPoolAaveV3.sol";
 
@@ -15,7 +14,7 @@ import "./interfaces/ILendingPoolAaveV3.sol";
  * @dev No need to _enterMarket() as LendingPool already defaults collateral to true.
  * See https://github.com/aave/protocol-v2/blob/master/contracts/protocol/lendingpool/LendingPool.sol#L123-L126
  */
-contract AaveV3StrategyAvaxV1 is YakStrategyV2Payable, ReentrancyGuard {
+contract AaveV3StrategyAvaxV1 is YakStrategyV2Payable {
     using SafeMath for uint256;
 
     struct Reward {

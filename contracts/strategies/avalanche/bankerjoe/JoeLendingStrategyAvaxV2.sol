@@ -5,7 +5,6 @@ import "../../../YakStrategyV2Payable.sol";
 import "../../../interfaces/IWAVAX.sol";
 import "../../../interfaces/IERC20.sol";
 import "../../../lib/DexLibrary.sol";
-import "../../../lib/ReentrancyGuard.sol";
 import "./interfaces/IJoetroller.sol";
 import "./interfaces/IJoeRewardDistributor.sol";
 import "./interfaces/IJoeAVAXDelegator.sol";
@@ -15,7 +14,7 @@ import "./interfaces/IJoeERC20Delegator.sol";
  * @title Strategy for Banker Joe AVAX
  * @dev Banker Joe emits rewards in AVAX and ERC20. During AVAX claim, contract becomes gas bound
  */
-contract JoeLendingStrategyAvaxV2 is YakStrategyV2Payable, ReentrancyGuard {
+contract JoeLendingStrategyAvaxV2 is YakStrategyV2Payable {
     using SafeMath for uint256;
 
     IJoetroller private rewardController;
