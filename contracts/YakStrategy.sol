@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.13;
 
-import "./lib/SafeMath.sol";
 import "./lib/Ownable.sol";
 import "./lib/Permissioned.sol";
 import "./lib/ReentrancyGuard.sol";
@@ -12,8 +11,6 @@ import "./YakERC20.sol";
  * @notice YakStrategy should be inherited by new strategies
  */
 abstract contract YakStrategy is YakERC20, Ownable, Permissioned, ReentrancyGuard {
-    using SafeMath for uint256;
-
     struct StrategySettings {
         uint256 minTokensToReinvest;
         uint256 devFeeBips;
@@ -130,7 +127,7 @@ abstract contract YakStrategy is YakERC20, Ownable, Permissioned, ReentrancyGuar
     function estimateReinvestReward() external view returns (uint256) {
         uint256 unclaimedRewards = checkReward();
         if (unclaimedRewards >= MIN_TOKENS_TO_REINVEST) {
-            return unclaimedRewards.mul(REINVEST_REWARD_BIPS).div(BIPS_DIVISOR);
+            return (unclaimedRewards * REINVEST_REWARD_BIPS) / BIPS_DIVISOR;
         }
         return 0;
     }
@@ -162,10 +159,10 @@ abstract contract YakStrategy is YakERC20, Ownable, Permissioned, ReentrancyGuar
      * @return receipt tokens
      */
     function getSharesForDepositTokens(uint256 amount) public view returns (uint256) {
-        if (totalSupply.mul(totalDeposits) == 0) {
+        if (totalSupply * totalDeposits == 0) {
             return amount;
         }
-        return amount.mul(totalSupply).div(totalDeposits);
+        return (amount * totalSupply) / totalDeposits;
     }
 
     /**
@@ -174,10 +171,10 @@ abstract contract YakStrategy is YakERC20, Ownable, Permissioned, ReentrancyGuar
      * @return deposit tokens
      */
     function getDepositTokensForShares(uint256 amount) public view returns (uint256) {
-        if (totalSupply.mul(totalDeposits) == 0) {
+        if (totalSupply * totalDeposits == 0) {
             return 0;
         }
-        return amount.mul(totalDeposits).div(totalSupply);
+        return (amount * totalDeposits) / totalSupply;
     }
 
     /**
@@ -203,7 +200,7 @@ abstract contract YakStrategy is YakERC20, Ownable, Permissioned, ReentrancyGuar
      * @param newValue fee in BIPS
      */
     function updateDevFee(uint256 newValue) public onlyOwner {
-        require(newValue.add(REINVEST_REWARD_BIPS) <= BIPS_DIVISOR);
+        require(newValue + REINVEST_REWARD_BIPS <= BIPS_DIVISOR);
         emit UpdateDevFee(DEV_FEE_BIPS, newValue);
         DEV_FEE_BIPS = newValue;
     }
@@ -224,7 +221,7 @@ abstract contract YakStrategy is YakERC20, Ownable, Permissioned, ReentrancyGuar
      * @param newValue fee in BIPS
      */
     function updateReinvestReward(uint256 newValue) public onlyOwner {
-        require(newValue.add(DEV_FEE_BIPS) <= BIPS_DIVISOR);
+        require(newValue + DEV_FEE_BIPS <= BIPS_DIVISOR);
         emit UpdateReinvestReward(REINVEST_REWARD_BIPS, newValue);
         REINVEST_REWARD_BIPS = newValue;
     }

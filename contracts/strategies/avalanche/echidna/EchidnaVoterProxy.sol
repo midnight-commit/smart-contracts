@@ -2,7 +2,6 @@
 pragma solidity 0.8.13;
 
 import "../../../lib/SafeERC20.sol";
-import "../../../lib/SafeMath.sol";
 
 import "./interfaces/IEchidnaVoter.sol";
 import "./interfaces/IEchidnaVoterProxy.sol";
@@ -32,7 +31,6 @@ library SafeProxy {
  * use a new proxy.
  */
 contract EchidnaVoterProxy is IEchidnaVoterProxy {
-    using SafeMath for uint256;
     using SafeProxy for IEchidnaVoter;
     using SafeERC20 for IERC20;
 
@@ -181,7 +179,7 @@ contract EchidnaVoterProxy is IEchidnaVoterProxy {
         returns (uint256 pendingECD, uint256 pendingPTP)
     {
         pendingECD = IEchidnaMasterChef(_stakingContract).pendingEcd(_pid, address(voter));
-        pendingECD = pendingECD.sub(_calculateBoostFee(pendingECD));
+        pendingECD = pendingECD - _calculateBoostFee(pendingECD);
         pendingPTP = IVeEcdRewardPool(veEcdRewardPool).earned(address(voter));
     }
 
@@ -230,7 +228,7 @@ contract EchidnaVoterProxy is IEchidnaVoterProxy {
         uint256 claimedECD = IERC20(ECD).balanceOf(address(voter));
         if (claimedECD > 0) {
             uint256 boostFee = _calculateBoostFee(claimedECD);
-            uint256 reward = claimedECD.sub(boostFee);
+            uint256 reward = claimedECD - boostFee;
             voter.safeExecute(ECD, 0, abi.encodeWithSignature("transfer(address,uint256)", msg.sender, reward));
             if (boostFee > 0) {
                 voter.depositFromBalance(boostFee);
@@ -249,7 +247,7 @@ contract EchidnaVoterProxy is IEchidnaVoterProxy {
 
     function _calculateBoostFee(uint256 amount) private view returns (uint256 boostFee) {
         if (boosterFeeReceiver > address(0) && voter.depositsEnabled()) {
-            boostFee = amount.mul(boosterFee).div(BIPS_DIVISOR);
+            boostFee = (amount * boosterFee) / BIPS_DIVISOR;
         }
     }
 }

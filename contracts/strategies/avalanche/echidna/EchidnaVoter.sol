@@ -2,7 +2,6 @@
 pragma solidity 0.8.13;
 
 import "../../../lib/SafeERC20.sol";
-import "../../../lib/SafeMath.sol";
 import "../../../lib/Ownable.sol";
 import "../../../lib/ERC20.sol";
 import "../../../interfaces/IERC20.sol";
@@ -16,7 +15,6 @@ import "./interfaces/IVoteEscrow.sol";
  */
 contract EchidnaVoter is Ownable, IEchidnaVoter, ERC20 {
     using SafeERC20 for IERC20;
-    using SafeMath for uint256;
 
     IVoteEscrow public constant ESCROW = IVoteEscrow(0x721C2c768635D2b0147552861a0D8FDfde55C032);
     IERC20 private constant ECD = IERC20(0xeb8343D5284CaEc921F035207ca94DB6BAaaCBcd);
@@ -86,8 +84,8 @@ contract EchidnaVoter is Ownable, IEchidnaVoter, ERC20 {
             ESCROW.increase_amount(_amount);
             ECD.approve(address(ESCROW), 0);
             (, uint256 currentUnlockTime) = ESCROW.locked(address(this));
-            uint256 unlockTime = block.timestamp.add(MAXTIME);
-            if (unlockTime.div(WEEK).mul(WEEK) > currentUnlockTime) {
+            uint256 unlockTime = block.timestamp + MAXTIME;
+            if (((unlockTime / WEEK) * WEEK) > currentUnlockTime) {
                 ESCROW.increase_unlock_time(unlockTime);
             }
         } else {
@@ -96,7 +94,7 @@ contract EchidnaVoter is Ownable, IEchidnaVoter, ERC20 {
     }
 
     function _initLock(uint256 _amount) private {
-        uint256 unlockTime = block.timestamp.add(MAXTIME);
+        uint256 unlockTime = block.timestamp + MAXTIME;
         ECD.approve(address(ESCROW), _amount);
         ESCROW.create_lock(_amount, unlockTime);
         ECD.approve(address(ESCROW), 0);

@@ -14,7 +14,6 @@ import "./interfaces/IYakChef.sol";
  * @dev Fees are paid in WAVAX
  */
 contract MasterYakStrategyForSA is YakStrategy {
-    using SafeMath for uint256;
 
     IYakChef public stakingContract;
     IPair private swapPairToken;
@@ -81,7 +80,7 @@ contract MasterYakStrategyForSA is YakStrategy {
         require(depositToken.transferFrom(msg.sender, address(this), amount));
         _stakeDepositTokens(amount);
         _mint(account, getSharesForDepositTokens(amount));
-        totalDeposits = totalDeposits.add(amount);
+        totalDeposits = totalDeposits + amount;
         emit Deposit(account, amount);
     }
 
@@ -91,7 +90,7 @@ contract MasterYakStrategyForSA is YakStrategy {
             _withdrawDepositTokens(depositTokenAmount);
             _safeTransfer(address(depositToken), msg.sender, depositTokenAmount);
             _burn(msg.sender, amount);
-            totalDeposits = totalDeposits.sub(depositTokenAmount);
+            totalDeposits = totalDeposits - depositTokenAmount;
             emit Withdraw(msg.sender, depositTokenAmount);
         }
     }
@@ -115,25 +114,25 @@ contract MasterYakStrategyForSA is YakStrategy {
         stakingContract.deposit(PID, 0);
         IWAVAX(address(rewardToken)).deposit{value: amount}();
 
-        uint256 devFee = amount.mul(DEV_FEE_BIPS).div(BIPS_DIVISOR);
+        uint256 devFee = (amount * DEV_FEE_BIPS) / BIPS_DIVISOR;
         if (devFee > 0) {
             _safeTransfer(address(rewardToken), devAddr, devFee);
         }
 
-        uint256 reinvestFee = amount.mul(REINVEST_REWARD_BIPS).div(BIPS_DIVISOR);
+        uint256 reinvestFee = (amount * REINVEST_REWARD_BIPS) / BIPS_DIVISOR;
         if (reinvestFee > 0) {
             _safeTransfer(address(rewardToken), msg.sender, reinvestFee);
         }
 
         uint256 depositTokenAmount = DexLibrary.swap(
-            amount.sub(devFee).sub(reinvestFee),
+            amount - devFee - reinvestFee,
             address(rewardToken),
             address(depositToken),
             swapPairToken
         );
 
         _stakeDepositTokens(depositTokenAmount);
-        totalDeposits = totalDeposits.add(depositTokenAmount);
+        totalDeposits = totalDeposits + depositTokenAmount;
 
         emit Reinvest(totalDeposits, totalSupply);
     }
@@ -161,7 +160,7 @@ contract MasterYakStrategyForSA is YakStrategy {
     function checkReward() public view override returns (uint256) {
         uint256 pendingReward = stakingContract.pendingRewards(PID, address(this));
         uint256 contractBalance = address(this).balance;
-        return pendingReward.add(contractBalance);
+        return pendingReward + contractBalance;
     }
 
     function estimateDeployedBalance() external view override returns (uint256) {
@@ -173,7 +172,7 @@ contract MasterYakStrategyForSA is YakStrategy {
         uint256 balanceBefore = depositToken.balanceOf(address(this));
         stakingContract.emergencyWithdraw(PID);
         uint256 balanceAfter = depositToken.balanceOf(address(this));
-        require(balanceAfter.sub(balanceBefore) >= minReturnAmountAccepted, "MasterYakStrategy::rescueDeployedFunds");
+        require(balanceAfter - balanceBefore >= minReturnAmountAccepted, "MasterYakStrategy::rescueDeployedFunds");
         totalDeposits = balanceAfter;
         emit Reinvest(totalDeposits, totalSupply);
         if (DEPOSITS_ENABLED == true && disableDeposits == true) {
