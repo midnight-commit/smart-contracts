@@ -51,7 +51,7 @@ contract MasterYakStrategyForSA is YakStrategy {
         depositToken.approve(address(stakingContract), MAX_UINT);
     }
 
-    function deposit(uint256 amount) external override {
+    function deposit(uint256 amount) external override nonReentrant {
         _deposit(msg.sender, amount);
     }
 
@@ -61,12 +61,12 @@ contract MasterYakStrategyForSA is YakStrategy {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) external override {
+    ) external override nonReentrant {
         depositToken.permit(msg.sender, address(this), amount, deadline, v, r, s);
         _deposit(msg.sender, amount);
     }
 
-    function depositFor(address account, uint256 amount) external override {
+    function depositFor(address account, uint256 amount) external override nonReentrant {
         _deposit(account, amount);
     }
 
@@ -85,7 +85,7 @@ contract MasterYakStrategyForSA is YakStrategy {
         emit Deposit(account, amount);
     }
 
-    function withdraw(uint256 amount) external override {
+    function withdraw(uint256 amount) external override nonReentrant {
         uint256 depositTokenAmount = getDepositTokensForShares(amount);
         if (depositTokenAmount > 0) {
             _withdrawDepositTokens(depositTokenAmount);
@@ -101,7 +101,7 @@ contract MasterYakStrategyForSA is YakStrategy {
         stakingContract.withdraw(PID, amount);
     }
 
-    function reinvest() external override onlyEOA {
+    function reinvest() external override onlyEOA nonReentrant {
         uint256 unclaimedRewards = checkReward();
         require(unclaimedRewards >= MIN_TOKENS_TO_REINVEST, "MasterYakStrategy::reinvest");
         _reinvest(unclaimedRewards);
@@ -169,7 +169,7 @@ contract MasterYakStrategyForSA is YakStrategy {
         return amount;
     }
 
-    function rescueDeployedFunds(uint256 minReturnAmountAccepted, bool disableDeposits) external override onlyOwner {
+    function rescueDeployedFunds(uint256 minReturnAmountAccepted, bool disableDeposits) external override onlyOwner nonReentrant {
         uint256 balanceBefore = depositToken.balanceOf(address(this));
         stakingContract.emergencyWithdraw(PID);
         uint256 balanceAfter = depositToken.balanceOf(address(this));

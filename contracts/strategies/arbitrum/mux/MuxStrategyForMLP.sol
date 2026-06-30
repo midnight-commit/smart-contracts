@@ -26,7 +26,7 @@ contract MuxStrategyForMLP is YakStrategyV3 {
      * @notice Deposit tokens to receive receipt tokens
      * @param amount Amount of tokens to deposit
      */
-    function deposit(uint256 amount) external override {
+    function deposit(uint256 amount) external override nonReentrant {
         _deposit(msg.sender, amount);
     }
 
@@ -37,7 +37,7 @@ contract MuxStrategyForMLP is YakStrategyV3 {
         revert();
     }
 
-    function depositFor(address account, uint256 amount) external override {
+    function depositFor(address account, uint256 amount) external override nonReentrant {
         _deposit(account, amount);
     }
 
@@ -52,7 +52,7 @@ contract MuxStrategyForMLP is YakStrategyV3 {
         emit Deposit(account, amount);
     }
 
-    function withdraw(uint256 amount) external override {
+    function withdraw(uint256 amount) external override nonReentrant {
         uint256 depositTokenAmount = getDepositTokensForShares(amount);
         require(depositTokenAmount > 0, "MuxStrategyForMLP::withdraw");
         proxy.withdrawMlp(depositTokenAmount);
@@ -61,7 +61,7 @@ contract MuxStrategyForMLP is YakStrategyV3 {
         emit Withdraw(msg.sender, depositTokenAmount);
     }
 
-    function reinvest() external override onlyEOA {
+    function reinvest() external override onlyEOA nonReentrant {
         uint256 amount = checkReward();
         require(amount >= MIN_TOKENS_TO_REINVEST && !proxy.largePendingOrder(), "MuxStrategyForMLP::reinvest");
         _reinvest(false);
