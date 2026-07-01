@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.13;
 
-import "../YakStrategyV3.sol";
+import "../YakStrategy.sol";
 import "../interfaces/IWGAS.sol";
 import "../lib/SafeERC20.sol";
 import "./../interfaces/ISimpleRouter.sol";
@@ -9,7 +9,7 @@ import "./../interfaces/ISimpleRouter.sol";
 /**
  * @notice BaseStrategy
  */
-abstract contract BaseStrategy is YakStrategyV3 {
+abstract contract BaseStrategy is YakStrategy {
     using SafeERC20 for IERC20;
 
     IWGAS internal immutable WGAS;
@@ -33,7 +33,7 @@ abstract contract BaseStrategy is YakStrategyV3 {
     event UpdateRouter(address oldRouter, address newRouter);
 
     constructor(BaseStrategySettings memory _settings, StrategySettings memory _strategySettings)
-        YakStrategyV3(_strategySettings)
+        YakStrategy(_strategySettings)
     {
         WGAS = IWGAS(_settings.gasToken);
 

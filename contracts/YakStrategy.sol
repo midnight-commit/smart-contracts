@@ -10,7 +10,7 @@ import "./interfaces/IERC20.sol";
 /**
  * @notice YakStrategy should be inherited by new strategies
  */
-abstract contract YakStrategyV3 is YakERC20, Ownable, ReentrancyGuard {
+abstract contract YakStrategy is YakERC20, Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     struct StrategySettings {
